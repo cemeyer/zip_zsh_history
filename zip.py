@@ -1,8 +1,27 @@
 #!/usr/bin/env python3
 
+import hashlib
 import os
 import re
 import sys
+
+def myhash(obj):
+    if obj is None:
+        return None
+
+    if getattr(obj, '__hash__', None) is None:
+        raise ValueError("not hashable type")
+
+    try:
+        # Python 3.6+
+        hiter = hashlib.blake2b()
+    except AttributeError as e:
+        hiter = hashlib.sha512()
+
+    # Not particularly elegant but AFAIK captures all the necessary
+    # bytes for uniqueness of ("a", "b", "c") tuples.
+    hiter.update(repr(obj).encode("utf-8"))
+    return hiter.digest()[:32]
 
 # Re-opens the file-like stream of string 'attr' in parent object 'pobj' with
 # the open() builtin parameters 'args' and 'kwargs'.  Unix-specific.
@@ -64,11 +83,37 @@ def linewriter(fstream, gen):
     for d, e, c in gen:
         fstream.write(": %s:%s;%s\n" % (d, e, c))
 
+# Consume items from sequence 'rdr', stopping when StopIteration yields None,
+# or we find a unique object not already present in 'dups.'  The myhash
+# function is used to determine uniqueness.  The intended objects are
+# tuples of strings.
+#
+# If a unique object is found, its hash is stored in 'dups' and the object
+# itself stored in 'nexts'['idx'].  (If StopIteration is found, None is stored
+# in 'nexts'['idx'].)
+def dedupenext(nexts, idx, rdr, dups):
+    x = next(rdr, None)
+    h = myhash(x)
+    if x is None:
+        nexts[idx] = x
+        return
+
+    while h in dups:
+        x = next(rdr, None)
+        h = myhash(x)
+        if x is None:
+            break
+
+    if x is not None:
+        dups.add(h)
+    nexts[idx] = x
+
 def zipreaders(readers):
     nexts = [None] * len(readers)
+    dups = set()
 
     for i, r in enumerate(readers):
-        nexts[i] = next(r, None)
+        dedupenext(nexts, i, r, dups)
 
     while True:
         # No input remaining?
@@ -87,7 +132,7 @@ def zipreaders(readers):
                 idx = i
 
         yield nexts[idx]
-        nexts[idx] = next(readers[idx], None)
+        dedupenext(nexts, idx, readers[idx], dups)
 
 def main():
     sys.argv.pop(0)
@@ -95,6 +140,7 @@ def main():
         print("Usage: zip.py zhistory1 zhistory2 [zhistoryN...]")
         print("")
         print("  Zips 2 or more zsh history files together, ordered by timestamp.")
+        print("  Duplicate lines are only printed once.")
         exit(1)
 
     # Stupid hoops because Python stream error-handling is immutable after
