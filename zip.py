@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 
 import hashlib
+import io
 import os
 import re
 import sys
+
+# py-zstandard, not py-zstd.
+import zstd
+assert zstd.ZstdDecompressor
 
 def myhash(obj):
     if obj is None:
@@ -48,10 +53,39 @@ def set_stream_errorh(pobj, attr, *args, **kwargs):
 zh_line = r'^: (?P<datetime>\d+):(?P<exetime>\d+);(?P<contents>.*)$'
 zh_line_re = re.compile(zh_line)
 
+# Attempts to detect and open compressed files in a read-only streaming
+# fashion, such as Zstandard-compressed.  If that fails, falls back to ordinary
+# uncompressed access.
+def filereader(filename):
+    bf = open(filename, "rb")
+    try:
+        dctx = zstd.ZstdDecompressor()
+        reader = dctx.stream_reader(bf)
+
+        # Force detection of file magic header, or fail (raise ZstdError).
+        # Without this, py-zstandard only lazily opens the stream and does not
+        # verify the magic header.
+        reader.read(1)
+
+        # Rewind.  Py-Zstd doesn't support trivial rewind-to-beginning, so
+        # emulate it.  Yes, closing the zstd streamer doesn't seem to close the
+        # underlying stream (bf).
+        reader.close()
+        bf.seek(0, os.SEEK_SET)
+        reader = dctx.stream_reader(bf)
+
+        return io.TextIOWrapper(reader, encoding="utf-8",
+                errors="surrogateescape")
+    except zstd.ZstdError:
+        bf.close()
+        bf = None
+
+    return open(filename, "r", encoding="utf-8", errors="surrogateescape")
+
 def linereader(filename):
     continuation = False
     lno = 0
-    with open(filename, "r", encoding="utf-8", errors="surrogateescape") as f:
+    with filereader(filename) as f:
         for line in f:
             lno += 1
             line = line.rstrip("\n")
