@@ -7,7 +7,7 @@ import re
 import sys
 
 # py-zstandard, not py-zstd.
-import zstd
+import zstandard as zstd
 assert zstd.ZstdDecompressor
 
 def myhash(obj):
@@ -68,10 +68,9 @@ def filereader(filename):
         reader.read(1)
 
         # Rewind.  Py-Zstd doesn't support trivial rewind-to-beginning, so
-        # emulate it.  Yes, closing the zstd streamer doesn't seem to close the
-        # underlying stream (bf).
+        # emulate it.
         reader.close()
-        bf.seek(0, os.SEEK_SET)
+        bf = open(filename, "rb")
         reader = dctx.stream_reader(bf)
 
         return io.TextIOWrapper(reader, encoding="utf-8",
